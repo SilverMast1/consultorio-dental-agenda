@@ -9,8 +9,8 @@ const DEFAULT_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbzDL0Rc27aR4ZfGigjbMrDDagHriTxuzQOiUv2eD_SRvc1wm3LPHH8NHsmyy1e_RdW-BA/exec";
 
 const STORAGE_KEYS = {
-  CONFIG: "dental_config_v1",
-  DATA: "dental_local_data_v1"
+  CONFIG: "dental_config_v3",
+  DATA: "dental_local_data_v3"
 };
 
 let state = {
@@ -110,6 +110,9 @@ function obtenerFechaHoy() {
 // INICIALIZACIÓN
 // ============================================================================
 document.addEventListener("DOMContentLoaded", () => {
+  ["dental_config_v1", "dental_local_data_v1", "dental_config_v2", "dental_local_data_v2"].forEach(
+    (k) => localStorage.removeItem(k)
+  );
   lucide.createIcons();
   cargarConfiguracionLocal();
   cargarDatosLocales();
@@ -237,8 +240,16 @@ async function sincronizarDesdeGoogleSheets() {
 }
 
 async function enviarAccionGoogleSheets(payload) {
-  if (!state.config.scriptUrl) {
-    return { ok: true, localOnly: true };
+  const url = state.config.scriptUrl || DEFAULT_SCRIPT_URL;
+  if (!state.config.accessKey) {
+    const authModalEl = document.getElementById("authModal");
+    const authErrorEl = document.getElementById("authError");
+    if (authErrorEl) {
+      authErrorEl.textContent = "Ingresa la contraseña del consultorio para guardar en Google Sheets.";
+      authErrorEl.classList.remove("hidden");
+    }
+    if (authModalEl) authModalEl.classList.remove("hidden");
+    return { ok: false, error: "Falta contraseña de acceso." };
   }
 
   try {
@@ -247,7 +258,7 @@ async function enviarAccionGoogleSheets(payload) {
       key: state.config.accessKey
     });
 
-    const response = await fetch(state.config.scriptUrl, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: body
@@ -257,11 +268,24 @@ async function enviarAccionGoogleSheets(payload) {
     if (!res.ok) {
       throw new Error(res.error || "Error guardando en Google Sheets");
     }
+    actualizarEncabezado("Conectado a Google Sheets", true);
+    mostrarToast("Guardado en Google Sheets correctamente");
     return res;
   } catch (err) {
     console.error("Error enviando a Google Sheets:", err);
-    mostrarToast("Guardado localmente (error de red con Google Sheets)");
-    return { ok: false, error: err.message };
+    const msg = err.message || "Error de conexión";
+    if (msg.toLowerCase().includes("clave")) {
+      state.config.accessKey = "";
+      const authModalEl = document.getElementById("authModal");
+      const authErrorEl = document.getElementById("authError");
+      if (authErrorEl) {
+        authErrorEl.textContent = msg;
+        authErrorEl.classList.remove("hidden");
+      }
+      if (authModalEl) authModalEl.classList.remove("hidden");
+    }
+    mostrarToast("Error en Google Sheets: " + msg);
+    return { ok: false, error: msg };
   }
 }
 
