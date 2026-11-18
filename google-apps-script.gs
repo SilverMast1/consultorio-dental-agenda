@@ -119,7 +119,9 @@ function doGet(e) {
  * Maneja peticiones POST (Guardar pacientes, tratamientos y citas)
  */
 function doPost(e) {
+  const lock = LockService.getScriptLock();
   try {
+    lock.waitLock(10000);
     inicializarHojas();
     const payload = JSON.parse(e.postData.contents);
 
@@ -253,6 +255,10 @@ function doPost(e) {
     return respuestaJSON({ ok: false, error: "Acción no reconocida: " + action });
   } catch (err) {
     return respuestaJSON({ ok: false, error: err.toString() });
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (lockErr) {}
   }
 }
 

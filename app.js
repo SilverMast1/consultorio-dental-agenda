@@ -10,7 +10,15 @@ const DEFAULT_SCRIPT_URL =
 
 const STORAGE_KEYS = {
   CONFIG: "dental_config_v3",
-  DATA: "dental_local_data_v3"
+  DATA: "dental_local_data_v3",
+  QUEUE: "dental_pending_queue_v4"
+};
+
+const FDI_QUADRANTS = {
+  supDer: ["18", "17", "16", "15", "14", "13", "12", "11"],
+  supIzq: ["21", "22", "23", "24", "25", "26", "27", "28"],
+  infDer: ["48", "47", "46", "45", "44", "43", "42", "41"],
+  infIzq: ["31", "32", "33", "34", "35", "36", "37", "38"]
 };
 
 let state = {
@@ -22,6 +30,7 @@ let state = {
   pacientes: [],
   historial: [],
   agenda: [],
+  pendingQueue: [],
   selectedPatientId: null,
   isSyncing: false
 };
@@ -116,6 +125,8 @@ document.addEventListener("DOMContentLoaded", () => {
   lucide.createIcons();
   cargarConfiguracionLocal();
   cargarDatosLocales();
+  cargarColaPendiente();
+  inicializarOdontogramaSelector();
   inicializarEventos();
 
   // Poner fecha de hoy por defecto en formularios
@@ -188,6 +199,64 @@ function guardarDatosLocales() {
   );
 }
 
+function cargarColaPendiente() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.QUEUE);
+    state.pendingQueue = raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    state.pendingQueue = [];
+  }
+}
+
+function guardarColaPendiente() {
+  localStorage.setItem(STORAGE_KEYS.QUEUE, JSON.stringify(state.pendingQueue || []));
+}
+
+async function enviarPeticionPost(url, payload) {
+  const body = JSON.stringify({
+    ...payload,
+    key: state.config.accessKey
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: body
+  });
+  return response.json();
+}
+
+async function vaciarColaPendiente() {
+  if (!state.pendingQueue || state.pendingQueue.length === 0) return true;
+  if (!state.config.accessKey) return false;
+
+  const url = state.config.scriptUrl || DEFAULT_SCRIPT_URL;
+  const restantes = [];
+  let huboErrorClave = false;
+
+  for (let i = 0; i < state.pendingQueue.length; i++) {
+    const item = state.pendingQueue[i];
+    try {
+      const res = await enviarPeticionPost(url, item);
+      if (!res.ok) {
+        if ((res.error || "").toLowerCase().includes("clave")) {
+          huboErrorClave = true;
+          restantes.push(...state.pendingQueue.slice(i));
+          break;
+        }
+        // Si el servidor devolvió error lógico de negocio (ej. cita no encontrada), no lo reencolamos infinito
+        continue;
+      }
+    } catch (e) {
+      restantes.push(...state.pendingQueue.slice(i));
+      break;
+    }
+  }
+
+  state.pendingQueue = restantes;
+  guardarColaPendiente();
+  return !huboErrorClave;
+}
+
 // ============================================================================
 // COMUNICACIÓN CON GOOGLE SHEETS (GOOGLE APPS SCRIPT)
 // ============================================================================
@@ -205,6 +274,14 @@ async function sincronizarDesdeGoogleSheets() {
     state.isSyncing = true;
     if (authErrorEl) authErrorEl.classList.add("hidden");
     actualizarEncabezado("Sincronizando...");
+
+    if (state.pendingQueue.length > 0) {
+      const okCola = await vaciarColaPendiente();
+      if (!okCola) {
+        throw new Error("Clave de acceso del consultorio incorrecta.");
+      }
+    }
+
     const url = `${state.config.scriptUrl}?key=${encodeURIComponent(state.config.accessKey)}&t=${Date.now()}`;
     const response = await fetch(url, { method: "GET" });
     const data = await response.json();
@@ -253,20 +330,15 @@ async function enviarAccionGoogleSheets(payload) {
   }
 
   try {
-    const body = JSON.stringify({
-      ...payload,
-      key: state.config.accessKey
-    });
+    if (state.pendingQueue.length > 0) {
+      await vaciarColaPendiente();
+    }
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: body
-    });
-
-    const res = await response.json();
+    const res = await enviarPeticionPost(url, payload);
     if (!res.ok) {
-      throw new Error(res.error || "Error guardando en Google Sheets");
+      const serverErr = new Error(res.error || "Error guardando en Google Sheets");
+      serverErr.isServerRejection = true;
+      throw serverErr;
     }
     actualizarEncabezado("Conectado a Google Sheets", true);
     mostrarToast("Guardado en Google Sheets correctamente");
@@ -283,8 +355,17 @@ async function enviarAccionGoogleSheets(payload) {
         authErrorEl.classList.remove("hidden");
       }
       if (authModalEl) authModalEl.classList.remove("hidden");
+      mostrarToast("Error en Google Sheets: " + msg);
+    } else if (!err.isServerRejection) {
+      state.pendingQueue.push(payload);
+      guardarColaPendiente();
+      actualizarEncabezado(`Pendientes por subir: ${state.pendingQueue.length}`, false, true);
+      mostrarToast(
+        `Sin red: guardado localmente (${state.pendingQueue.length} pendiente(s) por sincronizar)`
+      );
+    } else {
+      mostrarToast("Error en Google Sheets: " + msg);
     }
-    mostrarToast("Error en Google Sheets: " + msg);
     return { ok: false, error: msg };
   }
 }
@@ -323,6 +404,8 @@ function renderizarTodo() {
 
 function renderizarEstadisticas() {
   const hoy = obtenerFechaHoy();
+  const mesActual = hoy.substring(0, 7); // YYYY-MM
+
   document.getElementById("statTotalPacientes").textContent = state.pacientes.length;
   document.getElementById("statTotalTratamientos").textContent = state.historial.length;
 
@@ -333,8 +416,24 @@ function renderizarEstadisticas() {
     (c) => c.Estado === "Programada"
   ).length;
 
+  const ingresosMes = state.historial.reduce((acc, item) => {
+    const fecha = String(item.Fecha_Atencion || "");
+    if (fecha.startsWith(mesActual)) {
+      const monto = parseFloat(item.Costo);
+      if (!Number.isNaN(monto)) return acc + monto;
+    }
+    return acc;
+  }, 0);
+
   document.getElementById("statCitasHoy").textContent = citasHoy;
   document.getElementById("statCitasPendientes").textContent = citasPendientes;
+  const statIngresosEl = document.getElementById("statIngresosMes");
+  if (statIngresosEl) {
+    statIngresosEl.textContent = `$${ingresosMes.toLocaleString("es-MX", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`;
+  }
 }
 
 function renderizarListaPacientes() {
@@ -342,6 +441,7 @@ function renderizarListaPacientes() {
   const filtro = (document.getElementById("searchPatientsList").value || "").toLowerCase().trim();
 
   const filtrados = state.pacientes.filter((p) => {
+    if (!filtro) return true;
     const nombre = (p.Nombre_Completo || "").toLowerCase();
     const tel = (p.Telefono || "").toLowerCase();
     const id = (p.ID_Paciente || "").toLowerCase();
@@ -357,12 +457,21 @@ function renderizarListaPacientes() {
     return;
   }
 
-  container.innerHTML = filtrados
+  // Contar visitas en una sola pasada O(N) para escalar a miles de registros sin trabar el DOM
+  const visitasPorPaciente = {};
+  for (let i = 0; i < state.historial.length; i++) {
+    const pid = String(state.historial[i].ID_Paciente || "");
+    visitasPorPaciente[pid] = (visitasPorPaciente[pid] || 0) + 1;
+  }
+
+  const MAX_VISIBLES = 100;
+  const visibles = filtrados.slice(0, MAX_VISIBLES);
+
+  let html = visibles
     .map((p) => {
-      const isSelected = String(p.ID_Paciente) === String(state.selectedPatientId);
-      const numVisitas = state.historial.filter(
-        (h) => String(h.ID_Paciente) === String(p.ID_Paciente)
-      ).length;
+      const pid = String(p.ID_Paciente);
+      const isSelected = pid === String(state.selectedPatientId);
+      const numVisitas = visitasPorPaciente[pid] || 0;
 
       return `
         <button type="button" onclick="seleccionarPaciente('${p.ID_Paciente}')"
@@ -382,6 +491,16 @@ function renderizarListaPacientes() {
       `;
     })
     .join("");
+
+  if (filtrados.length > MAX_VISIBLES) {
+    html += `
+      <div class="p-3 text-center text-[11px] font-medium text-sky-700 bg-sky-50 rounded-xl mt-2">
+        Mostrando los primeros ${MAX_VISIBLES} de ${filtrados.length} pacientes. Usa el buscador para filtrar por nombre o teléfono.
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
 }
 
 function renderizarSelectoresPacientes() {
@@ -445,6 +564,30 @@ function renderizarExpedienteSeleccionado() {
   const trabajos = state.historial
     .filter((h) => String(h.ID_Paciente) === String(paciente.ID_Paciente))
     .sort((a, b) => (b.Fecha_Atencion || "").localeCompare(a.Fecha_Atencion || ""));
+
+  const ultimaVisita = trabajos.length > 0 ? trabajos[0].Fecha_Atencion || "-" : "Sin visitas";
+  const totalPagado = trabajos.reduce((sum, t) => {
+    const val = parseFloat(t.Costo);
+    return sum + (Number.isNaN(val) ? 0 : val);
+  }, 0);
+
+  const expUltimaEl = document.getElementById("expUltimaVisita");
+  if (expUltimaEl) expUltimaEl.textContent = ultimaVisita;
+  const expTotalEl = document.getElementById("expTotalPagado");
+  if (expTotalEl) {
+    expTotalEl.textContent = `$${totalPagado.toLocaleString("es-MX", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`;
+  }
+
+  // Renderizar odontograma compacto con piezas tratadas en el historial
+  const piezasTratadas = new Set();
+  trabajos.forEach((t) => {
+    const matches = String(t.Pieza_Dental || "").match(/\b(1[1-8]|2[1-8]|3[1-8]|4[1-8])\b/g);
+    if (matches) matches.forEach((m) => piezasTratadas.add(m));
+  });
+  renderizarOdontogramaResumen(piezasTratadas);
 
   document.getElementById("expCountTratamientos").textContent = `${trabajos.length} registro(s)`;
 
@@ -581,6 +724,12 @@ function renderizarAgenda() {
           </div>
 
           <div class="flex flex-wrap items-center gap-2 shrink-0">
+            <button type="button" onclick="enviarRecordatorioWhatsApp('${c.ID_Cita}')"
+              title="Enviar recordatorio por WhatsApp"
+              class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition flex items-center gap-1">
+              <i data-lucide="message-circle" class="w-3.5 h-3.5"></i>
+              WhatsApp
+            </button>
             <button type="button" onclick="atenderCitaPaciente('${c.ID_Cita}')"
               class="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold transition flex items-center gap-1">
               <i data-lucide="Stethoscope" class="w-3.5 h-3.5"></i>
@@ -711,6 +860,11 @@ function descargarExpedientePDF() {
     .filter((h) => String(h.ID_Paciente) === String(paciente.ID_Paciente))
     .sort((a, b) => (b.Fecha_Atencion || "").localeCompare(a.Fecha_Atencion || ""));
 
+  const totalAcumulado = trabajos.reduce((sum, t) => {
+    const val = parseFloat(t.Costo);
+    return sum + (Number.isNaN(val) ? 0 : val);
+  }, 0);
+
   const filasTabla = trabajos.map((t) => [
     t.Fecha_Atencion || "-",
     t.Pieza_Dental || "General",
@@ -727,10 +881,27 @@ function descargarExpedientePDF() {
       filasTabla.length > 0
         ? filasTabla
         : [["-", "-", "Sin procedimientos registrados a la fecha", "-", "-", "-"]],
+    foot:
+      filasTabla.length > 0
+        ? [[
+            "TOTAL",
+            "",
+            `${trabajos.length} procedimiento(s) realizado(s)`,
+            "",
+            "Acumulado:",
+            `$${totalAcumulado.toFixed(2)}`
+          ]]
+        : undefined,
     theme: "grid",
     headStyles: {
       fillColor: [13, 148, 136],
       textColor: 255,
+      fontSize: 9,
+      fontStyle: "bold"
+    },
+    footStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
       fontSize: 9,
       fontStyle: "bold"
     },
@@ -762,6 +933,291 @@ function descargarExpedientePDF() {
     .replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
   doc.save(nombreArchivo);
   mostrarToast("PDF del expediente descargado correctamente");
+}
+
+function descargarReciboUltimaConsultaPDF() {
+  const paciente = state.pacientes.find(
+    (p) => String(p.ID_Paciente) === String(state.selectedPatientId)
+  );
+  if (!paciente) {
+    mostrarToast("Selecciona un paciente primero");
+    return;
+  }
+
+  const trabajos = state.historial
+    .filter((h) => String(h.ID_Paciente) === String(paciente.ID_Paciente))
+    .sort((a, b) => (b.Fecha_Atencion || "").localeCompare(a.Fecha_Atencion || ""));
+
+  if (trabajos.length === 0) {
+    mostrarToast("El paciente aún no tiene consultas registradas para generar recibo");
+    return;
+  }
+
+  const fechaUltima = trabajos[0].Fecha_Atencion || obtenerFechaHoy();
+  const trabajosFecha = trabajos.filter((t) => (t.Fecha_Atencion || "") === fechaUltima);
+  const totalRecibo = trabajosFecha.reduce((sum, t) => {
+    const val = parseFloat(t.Costo);
+    return sum + (Number.isNaN(val) ? 0 : val);
+  }, 0);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const nombreConsultorio = state.config.clinicName || "Consultorio Dental";
+
+  doc.setFillColor(79, 70, 229);
+  doc.rect(0, 0, 210, 32, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text(nombreConsultorio.toUpperCase(), 14, 14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text("COMPROBANTE DE ATENCIÓN Y HONORARIOS ODONTOLÓGICOS", 14, 22);
+  doc.text(`Fecha de atención: ${fechaUltima}`, 14, 28);
+
+  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text(`Paciente: ${paciente.Nombre_Completo || ""}`, 14, 43);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Expediente: ${paciente.ID_Paciente || ""}   |   Teléfono: ${paciente.Telefono || "-"}`, 14, 50);
+
+  const filas = trabajosFecha.map((t) => [
+    t.Pieza_Dental || "General",
+    t.Procedimiento_Realizado || "-",
+    t.Observaciones_Evo || "-",
+    t.Costo ? `$${Number(t.Costo).toFixed(2)}` : "$0.00"
+  ]);
+
+  doc.autoTable({
+    startY: 57,
+    head: [["Pieza / Zona", "Procedimiento Realizado", "Indicaciones", "Importe"]],
+    body: filas,
+    foot: [["", "TOTAL DEL DÍA", "", `$${totalRecibo.toFixed(2)}`]],
+    theme: "grid",
+    headStyles: { fillColor: [79, 70, 229], textColor: 255, fontSize: 9, fontStyle: "bold" },
+    footStyles: { fillColor: [238, 242, 255], textColor: [30, 41, 59], fontSize: 10, fontStyle: "bold" },
+    bodyStyles: { fontSize: 9 }
+  });
+
+  const finalY = doc.lastAutoTable.finalY + 20;
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text("Gracias por su confianza.", 105, finalY, { align: "center" });
+
+  const nombreArchivo = `Recibo_${(paciente.Nombre_Completo || "Paciente").replace(/[^a-zA-Z0-9]/g, "_")}_${fechaUltima}.pdf`;
+  doc.save(nombreArchivo);
+  mostrarToast("Recibo PDF de la última consulta descargado");
+}
+
+function exportarRespaldoCSV() {
+  if (state.pacientes.length === 0 && state.historial.length === 0) {
+    mostrarToast("No hay datos cargados para exportar");
+    return;
+  }
+
+  const mapaPacientes = {};
+  state.pacientes.forEach((p) => {
+    mapaPacientes[String(p.ID_Paciente)] = p;
+  });
+
+  const escaparCSV = (val) => {
+    const s = String(val ?? "").replace(/"/g, '""');
+    return `"${s}"`;
+  };
+
+  const encabezados = [
+    "ID_Paciente",
+    "Nombre_Paciente",
+    "Telefono",
+    "Edad",
+    "Alergias_Antecedentes",
+    "Fecha_Atencion",
+    "Pieza_Dental",
+    "Procedimiento_Realizado",
+    "Observaciones_Evo",
+    "Costo",
+    "Doctor"
+  ];
+
+  const filas = [encabezados.map(escaparCSV).join(",")];
+  const pacientesConHistorial = new Set();
+
+  state.historial.forEach((h) => {
+    const pid = String(h.ID_Paciente || "");
+    pacientesConHistorial.add(pid);
+    const p = mapaPacientes[pid] || {};
+    filas.push(
+      [
+        pid,
+        h.Nombre_Paciente || p.Nombre_Completo || "",
+        p.Telefono || "",
+        p.Edad || "",
+        p.Alergias_Antecedentes || "",
+        h.Fecha_Atencion || "",
+        h.Pieza_Dental || "",
+        h.Procedimiento_Realizado || "",
+        h.Observaciones_Evo || "",
+        h.Costo || "0",
+        h.Doctor || ""
+      ]
+        .map(escaparCSV)
+        .join(",")
+    );
+  });
+
+  // Incluir pacientes que aún no tienen historial clínico
+  state.pacientes.forEach((p) => {
+    const pid = String(p.ID_Paciente || "");
+    if (!pacientesConHistorial.has(pid)) {
+      filas.push(
+        [
+          pid,
+          p.Nombre_Completo || "",
+          p.Telefono || "",
+          p.Edad || "",
+          p.Alergias_Antecedentes || "",
+          p.Fecha_Registro || "",
+          "",
+          "Sin procedimientos aún",
+          p.Notas_Generales || "",
+          "0",
+          ""
+        ]
+          .map(escaparCSV)
+          .join(",")
+      );
+    }
+  });
+
+  const csvContent = "\uFEFF" + filas.join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `Respaldo_Consultorio_Dental_${obtenerFechaHoy()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  mostrarToast("Respaldo CSV descargado para Excel");
+}
+
+function abrirWhatsApp(telefono, mensaje) {
+  const digitos = String(telefono || "").replace(/\D/g, "");
+  if (!digitos) {
+    mostrarToast("El paciente no tiene teléfono registrado");
+    return;
+  }
+  // Si tiene 10 dígitos locales (ej. México), anteponemos 52; si ya incluye código, lo usamos tal cual
+  const numeroFinal = digitos.length === 10 ? `52${digitos}` : digitos;
+  const url = `https://wa.me/${numeroFinal}?text=${encodeURIComponent(mensaje)}`;
+  window.open(url, "_blank", "noopener");
+}
+
+window.enviarRecordatorioWhatsApp = function (idCita) {
+  const cita = state.agenda.find((c) => String(c.ID_Cita) === String(idCita));
+  if (!cita) return;
+  const clinica = state.config.clinicName || "Consultorio Dental";
+  const msg = `Hola ${cita.Nombre_Paciente || ""}, te recordamos tu cita en ${clinica} el día ${cita.Fecha_Cita} a las ${cita.Hora_Cita} hrs (${cita.Motivo_Tratamiento || "consulta dental"}). ¡Te esperamos!`;
+  abrirWhatsApp(cita.Telefono, msg);
+};
+
+function renderizarOdontogramaResumen(piezasTratadas) {
+  const cont = document.getElementById("expOdontogramaResumen");
+  if (!cont) return;
+
+  const renderFila = (lista) =>
+    lista
+      .map((pieza) => {
+        const tratada = piezasTratadas.has(pieza);
+        return `<span class="tooth-btn ${tratada ? "tooth-badge-treated" : "opacity-60"}">${pieza}</span>`;
+      })
+      .join("");
+
+  cont.innerHTML = `
+    <div class="flex items-center gap-2 min-w-max">
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.supDer)}</div>
+      <span class="text-slate-300 font-bold">|</span>
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.supIzq)}</div>
+    </div>
+    <div class="flex items-center gap-2 min-w-max">
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.infDer)}</div>
+      <span class="text-slate-300 font-bold">|</span>
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.infIzq)}</div>
+    </div>
+  `;
+}
+
+function inicializarOdontogramaSelector() {
+  const cont = document.getElementById("odontogramaSelector");
+  if (!cont) return;
+
+  const renderFila = (lista) =>
+    lista
+      .map(
+        (pieza) =>
+          `<button type="button" data-tooth="${pieza}" class="tooth-btn">${pieza}</button>`
+      )
+      .join("");
+
+  cont.innerHTML = `
+    <div class="flex items-center gap-2 min-w-max">
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.supDer)}</div>
+      <span class="text-slate-300 font-bold">|</span>
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.supIzq)}</div>
+    </div>
+    <div class="flex items-center gap-2 min-w-max">
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.infDer)}</div>
+      <span class="text-slate-300 font-bold">|</span>
+      <div class="flex gap-1">${renderFila(FDI_QUADRANTS.infIzq)}</div>
+    </div>
+  `;
+
+  const inputPieza = document.getElementById("regPiezaDental");
+  cont.querySelectorAll(".tooth-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pieza = btn.dataset.tooth;
+      const etiqueta = `OD ${pieza}`;
+      const actuales = inputPieza.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s && !["General", "Arcada Sup.", "Arcada Inf."].includes(s));
+
+      const idx = actuales.findIndex((item) => item === etiqueta || item === pieza);
+      if (idx >= 0) {
+        actuales.splice(idx, 1);
+      } else {
+        actuales.push(etiqueta);
+      }
+      inputPieza.value = actuales.join(", ");
+      actualizarOdontogramaSelectorVisual();
+    });
+  });
+
+  document.querySelectorAll(".zone-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      inputPieza.value = btn.dataset.zone;
+      actualizarOdontogramaSelectorVisual();
+    });
+  });
+
+  inputPieza.addEventListener("input", actualizarOdontogramaSelectorVisual);
+}
+
+function actualizarOdontogramaSelectorVisual() {
+  const cont = document.getElementById("odontogramaSelector");
+  const inputPieza = document.getElementById("regPiezaDental");
+  if (!cont || !inputPieza) return;
+  const texto = inputPieza.value || "";
+  const seleccionadas = new Set(texto.match(/\b(1[1-8]|2[1-8]|3[1-8]|4[1-8])\b/g) || []);
+  cont.querySelectorAll(".tooth-btn").forEach((btn) => {
+    if (seleccionadas.has(btn.dataset.tooth)) {
+      btn.classList.add("tooth-btn-selected");
+    } else {
+      btn.classList.remove("tooth-btn-selected");
+    }
+  });
 }
 
 // ============================================================================
@@ -802,10 +1258,12 @@ function inicializarEventos() {
   document.getElementById("btnLockSession").addEventListener("click", () => {
     localStorage.removeItem(STORAGE_KEYS.CONFIG);
     localStorage.removeItem(STORAGE_KEYS.DATA);
+    localStorage.removeItem(STORAGE_KEYS.QUEUE);
     state.config.accessKey = "";
     state.pacientes = [];
     state.historial = [];
     state.agenda = [];
+    state.pendingQueue = [];
     state.selectedPatientId = null;
     document.getElementById("configAccessKey").value = "";
     document.getElementById("authError").classList.add("hidden");
@@ -855,6 +1313,12 @@ function inicializarEventos() {
     sincronizarDesdeGoogleSheets();
   });
 
+  // Botón Exportar Respaldo CSV para Excel
+  const btnExportCSV = document.getElementById("btnExportCSV");
+  if (btnExportCSV) {
+    btnExportCSV.addEventListener("click", exportarRespaldoCSV);
+  }
+
   // Filtro en lista de pacientes
   document.getElementById("searchPatientsList").addEventListener("input", () => {
     renderizarListaPacientes();
@@ -870,11 +1334,14 @@ function inicializarEventos() {
       globalResults.classList.add("hidden");
       return;
     }
-    const matches = state.pacientes.filter(
-      (p) =>
-        (p.Nombre_Completo || "").toLowerCase().includes(q) ||
-        (p.Telefono || "").toLowerCase().includes(q)
-    );
+    const matches = state.pacientes
+      .filter(
+        (p) =>
+          (p.Nombre_Completo || "").toLowerCase().includes(q) ||
+          (p.Telefono || "").toLowerCase().includes(q) ||
+          (p.ID_Paciente || "").toLowerCase().includes(q)
+      )
+      .slice(0, 30);
     if (matches.length === 0) {
       globalResults.innerHTML = `<div class="p-3 text-xs text-slate-400">Sin coincidencias</div>`;
     } else {
@@ -921,8 +1388,28 @@ function inicializarEventos() {
     }
   });
 
-  // Botón Descargar PDF
+  // Botón Descargar PDF del expediente completo
   document.getElementById("btnDownloadPDF").addEventListener("click", descargarExpedientePDF);
+
+  // Botón Descargar Recibo PDF de la última consulta
+  const btnReceipt = document.getElementById("btnDownloadReceiptPDF");
+  if (btnReceipt) {
+    btnReceipt.addEventListener("click", descargarReciboUltimaConsultaPDF);
+  }
+
+  // Botón Contactar al paciente por WhatsApp
+  const btnWaPatient = document.getElementById("btnWhatsAppPatient");
+  if (btnWaPatient) {
+    btnWaPatient.addEventListener("click", () => {
+      const p = state.pacientes.find(
+        (x) => String(x.ID_Paciente) === String(state.selectedPatientId)
+      );
+      if (!p) return;
+      const clinica = state.config.clinicName || "Consultorio Dental";
+      const msg = `Hola ${p.Nombre_Completo || ""}, te saludamos de ${clinica}.`;
+      abrirWhatsApp(p.Telefono, msg);
+    });
+  }
 
   // Botón Agregar Trabajo desde el expediente activo
   document.getElementById("btnAddTreatmentFromExp").addEventListener("click", () => {
@@ -1013,10 +1500,11 @@ function inicializarEventos() {
 
     let idPaciente = document.getElementById("regSelectPaciente").value;
     const nombrePaciente = document.getElementById("regNombrePaciente").value.trim();
+    let pacienteNuevoCreado = null;
 
     if (!idPaciente) {
       idPaciente = "PAC-" + Date.now();
-      const nuevoP = {
+      pacienteNuevoCreado = {
         ID_Paciente: idPaciente,
         Nombre_Completo: nombrePaciente,
         Telefono: document.getElementById("regTelefono").value.trim(),
@@ -1026,7 +1514,7 @@ function inicializarEventos() {
         Notas_Generales: "",
         Fecha_Registro: obtenerFechaHoy()
       };
-      state.pacientes.unshift(nuevoP);
+      state.pacientes.unshift(pacienteNuevoCreado);
     }
 
     const nuevoRegistro = {
@@ -1053,9 +1541,17 @@ function inicializarEventos() {
     document.getElementById("regPiezaDental").value = "";
     document.getElementById("regObservaciones").value = "";
     document.getElementById("regCosto").value = "";
+    actualizarOdontogramaSelectorVisual();
 
     seleccionarPaciente(idPaciente);
     mostrarToast("Trabajo registrado en el expediente del paciente");
+
+    if (pacienteNuevoCreado) {
+      await enviarAccionGoogleSheets({
+        action: "guardarPaciente",
+        paciente: pacienteNuevoCreado
+      });
+    }
 
     await enviarAccionGoogleSheets({
       action: "agregarHistorial",

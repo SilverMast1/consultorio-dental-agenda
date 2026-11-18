@@ -14,7 +14,7 @@
   <!-- jsPDF & AutoTable para generar el PDF del expediente del paciente -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=4" />
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
 
@@ -96,6 +96,11 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <button id="btnExportCSV" title="Descargar respaldo en Excel (CSV)"
+          class="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-emerald-600 transition flex items-center gap-1.5 text-xs font-medium border border-slate-200">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span class="hidden sm:inline">Respaldo CSV</span>
+        </button>
         <button id="btnSyncNow" title="Sincronizar con Google Sheets"
           class="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-sky-600 transition flex items-center gap-1.5 text-xs font-medium border border-slate-200">
           <i data-lucide="refresh-cw" class="w-4 h-4"></i>
@@ -135,9 +140,9 @@
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
     <!-- TARJETAS DE RESUMEN RÁPIDO -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
       <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
-        <div class="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+        <div class="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
           <i data-lucide="users" class="w-5 h-5"></i>
         </div>
         <div>
@@ -147,7 +152,7 @@
       </div>
 
       <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
-        <div class="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+        <div class="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
           <i data-lucide="clipboard-check" class="w-5 h-5"></i>
         </div>
         <div>
@@ -157,7 +162,7 @@
       </div>
 
       <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
-        <div class="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+        <div class="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
           <i data-lucide="calendar" class="w-5 h-5"></i>
         </div>
         <div>
@@ -167,12 +172,22 @@
       </div>
 
       <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
-        <div class="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+        <div class="w-11 h-11 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
           <i data-lucide="clock" class="w-5 h-5"></i>
         </div>
         <div>
           <p class="text-xs text-slate-500 font-medium">Citas Pendientes</p>
           <p id="statCitasPendientes" class="text-xl font-bold text-slate-900">0</p>
+        </div>
+      </div>
+
+      <div class="col-span-2 lg:col-span-1 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+          <i data-lucide="wallet" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 font-medium">Ingresos del Mes</p>
+          <p id="statIngresosMes" class="text-xl font-bold text-emerald-700">$0.00</p>
         </div>
       </div>
     </div>
@@ -254,16 +269,28 @@
                       <span class="flex items-center gap-1"><i data-lucide="phone" class="w-3.5 h-3.5 text-slate-400"></i> <strong id="expTelefono">-</strong></span>
                       <span class="flex items-center gap-1"><i data-lucide="user" class="w-3.5 h-3.5 text-slate-400"></i> Edad: <strong id="expEdad">-</strong></span>
                       <span class="flex items-center gap-1"><i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-400"></i> Alta: <strong id="expFechaAlta">-</strong></span>
+                      <span class="flex items-center gap-1"><i data-lucide="clock" class="w-3.5 h-3.5 text-slate-400"></i> Última visita: <strong id="expUltimaVisita">-</strong></span>
+                      <span class="flex items-center gap-1"><i data-lucide="wallet" class="w-3.5 h-3.5 text-slate-400"></i> Total acumulado: <strong id="expTotalPagado" class="text-emerald-700">$0.00</strong></span>
                     </div>
                   </div>
                 </div>
 
-                <!-- Botones de Acción del Expediente (Descargar PDF / Nueva Consulta / Editar) -->
+                <!-- Botones de Acción del Expediente (Descargar PDF / Recibo / WhatsApp / Nueva Consulta / Editar) -->
                 <div class="flex flex-wrap items-center gap-2">
                   <button id="btnDownloadPDF"
                     class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
                     <i data-lucide="file-down" class="w-4 h-4"></i>
                     Descargar PDF
+                  </button>
+                  <button id="btnDownloadReceiptPDF"
+                    class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="receipt" class="w-4 h-4"></i>
+                    Recibo Hoy (PDF)
+                  </button>
+                  <button id="btnWhatsAppPatient"
+                    class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="message-circle" class="w-4 h-4"></i>
+                    WhatsApp
                   </button>
                   <button id="btnAddTreatmentFromExp"
                     class="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
@@ -292,6 +319,20 @@
                     <span class="font-bold text-slate-700 block">Notas Generales / Odontograma:</span>
                     <span id="expNotas" class="text-slate-600">Sin notas adicionales</span>
                   </div>
+                </div>
+              </div>
+
+              <!-- Odontograma compacto de piezas tratadas -->
+              <div class="mt-3 bg-white border border-slate-200 rounded-xl p-3">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <i data-lucide="sparkles" class="w-3.5 h-3.5 text-sky-600"></i>
+                    Odontograma del Paciente (Piezas con historial)
+                  </span>
+                  <span class="text-[11px] text-slate-400">Resaltado = pieza atendida</span>
+                </div>
+                <div id="expOdontogramaResumen" class="space-y-1.5 overflow-x-auto">
+                  <!-- Renderizado dinámico FDI -->
                 </div>
               </div>
             </div>
@@ -502,6 +543,21 @@
             </div>
           </div>
 
+          <!-- Odontograma FDI Rápido -->
+          <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <span class="text-xs font-semibold text-slate-700">Odontograma FDI Rápido (haz clic en las piezas tratadas)</span>
+              <div class="flex flex-wrap gap-1.5">
+                <button type="button" data-zone="General" class="zone-btn text-[11px] px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-teal-50 hover:text-teal-700 text-slate-600">General</button>
+                <button type="button" data-zone="Arcada Sup." class="zone-btn text-[11px] px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-teal-50 hover:text-teal-700 text-slate-600">Arcada Sup.</button>
+                <button type="button" data-zone="Arcada Inf." class="zone-btn text-[11px] px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-teal-50 hover:text-teal-700 text-slate-600">Arcada Inf.</button>
+              </div>
+            </div>
+            <div id="odontogramaSelector" class="space-y-1.5 overflow-x-auto">
+              <!-- Botones FDI renderizados por app.js -->
+            </div>
+          </div>
+
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1">
               ¿Qué trabajo o procedimiento se le realizó? *
@@ -617,6 +673,6 @@
     <span id="toastMessage">Acción completada</span>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
