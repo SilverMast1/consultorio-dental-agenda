@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Consultorio Dental | Agenda y Expediente Clínico Electrónico</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- jsPDF & AutoTable para generar el PDF del expediente del paciente -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- ===================================================================== -->
+  <!-- PANTALLA DE BLOQUEO / CONEXIÓN SEGURA CON GOOGLE SHEETS               -->
+  <!-- ===================================================================== -->
+  <div id="authModal" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 md:p-8 border border-slate-100">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-12 h-12 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-md">
+          <i data-lucide="shield-check" class="w-7 h-7"></i>
+        </div>
+        <div>
+          <h2 class="text-xl font-bold text-slate-900">Acceso al Consultorio Dental</h2>
+          <p class="text-xs text-slate-500">Expediente Clínico y Agenda en Google Sheets</p>
+        </div>
+      </div>
+
+      <p class="text-sm text-slate-600 mb-5">
+        Tus datos médicos se almacenan de forma privada en tu hoja de Google Sheets. Ingresa los datos de conexión o prueba el modo local/demostración.
+      </p>
+
+      <form id="authForm" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+            Nombre del Consultorio / Doctor(a)
+          </label>
+          <input type="text" id="configClinicName" placeholder="Ej. Clínica Dental Sonrisa Sana - Dr. Pérez"
+            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+            URL de tu Google Apps Script (Web App)
+          </label>
+          <input type="url" id="configScriptUrl" placeholder="https://script.google.com/macros/s/.../exec"
+            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" />
+          <p class="text-[11px] text-slate-400 mt-1">
+            Si lo dejas vacío, el sistema funcionará en modo local (guardado en este navegador) hasta que pegues tu URL.
+          </p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+            Clave de Acceso (Definida en el Script)
+          </label>
+          <input type="password" id="configAccessKey" placeholder="Por defecto: dental2026" value="dental2026"
+            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" required />
+        </div>
+
+        <div id="authError" class="hidden text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg p-3"></div>
+
+        <div class="pt-2 flex flex-col gap-2">
+          <button type="submit" id="btnConnect"
+            class="w-full py-2.5 px-4 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-lg shadow transition flex items-center justify-center gap-2 text-sm">
+            <i data-lucide="log-in" class="w-4 h-4"></i>
+            Entrar y Sincronizar Datos
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- BARRA SUPERIOR                                                        -->
+  <!-- ===================================================================== -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-600 to-teal-500 text-white flex items-center justify-center shadow">
+          <i data-lucide="stethoscope" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 id="headerClinicName" class="text-base sm:text-lg font-bold text-slate-900 leading-tight">
+            Consultorio Dental
+          </h1>
+          <div class="flex items-center gap-2">
+            <span id="syncBadge" class="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              Modo Local
+            </span>
+            <span id="lastSyncText" class="text-[11px] text-slate-400 hidden sm:inline"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Buscador rápido global de paciente -->
+      <div class="flex-1 max-w-md hidden md:block relative">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+          <input type="text" id="globalPatientSearch"
+            placeholder="Buscar paciente por nombre o teléfono para abrir su expediente..."
+            class="w-full pl-10 pr-4 py-2 text-sm rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none transition" />
+        </div>
+        <div id="globalSearchResults"
+          class="hidden absolute left-0 right-0 mt-1 bg-white rounded-xl shadow-xl border border-slate-200 max-h-72 overflow-y-auto z-40 divide-y divide-slate-100">
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnSyncNow" title="Sincronizar con Google Sheets"
+          class="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-sky-600 transition flex items-center gap-1.5 text-xs font-medium border border-slate-200">
+          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          <span class="hidden sm:inline">Sincronizar</span>
+        </button>
+        <button id="btnOpenConfig" title="Configuración de Google Sheets"
+          class="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-sky-600 transition border border-slate-200">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================================================================== -->
+  <!-- NAVEGACIÓN PRINCIPAL POR PESTAÑAS                                     -->
+  <!-- ===================================================================== -->
+  <div class="bg-white border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex overflow-x-auto no-scrollbar gap-2 py-2">
+      <button data-tab="tab-expedientes" class="tab-btn active-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition whitespace-nowrap">
+        <i data-lucide="folder-heart" class="w-4 h-4"></i>
+        Expedientes y Consultas
+      </button>
+      <button data-tab="tab-agenda" class="tab-btn flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">
+        <i data-lucide="calendar-clock" class="w-4 h-4"></i>
+        Agenda de Citas
+      </button>
+      <button data-tab="tab-registrar" class="tab-btn flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">
+        <i data-lucide="file-plus-2" class="w-4 h-4"></i>
+        Registrar Trabajo / Atención
+      </button>
+      <button data-tab="tab-guia" class="tab-btn flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">
+        <i data-lucide="help-circle" class="w-4 h-4"></i>
+        Guía Google Sheets
+      </button>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- CONTENIDO PRINCIPAL                                                   -->
+  <!-- ===================================================================== -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+    <!-- TARJETAS DE RESUMEN RÁPIDO -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+          <i data-lucide="users" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 font-medium">Total Pacientes</p>
+          <p id="statTotalPacientes" class="text-xl font-bold text-slate-900">0</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+          <i data-lucide="clipboard-check" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 font-medium">Trabajos Realizados</p>
+          <p id="statTotalTratamientos" class="text-xl font-bold text-slate-900">0</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+          <i data-lucide="calendar" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 font-medium">Citas para Hoy</p>
+          <p id="statCitasHoy" class="text-xl font-bold text-slate-900">0</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+          <i data-lucide="clock" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <p class="text-xs text-slate-500 font-medium">Citas Pendientes</p>
+          <p id="statCitasPendientes" class="text-xl font-bold text-slate-900">0</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- PESTAÑA 1: EXPEDIENTES ELECTRÓNICOS Y CONSULTA DE PACIENTES         -->
+    <!-- =================================================================== -->
+    <section id="tab-expedientes" class="tab-panel">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Columna Izquierda: Lista de Pacientes y Buscador -->
+        <div class="lg:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[680px]">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Directorio de Pacientes</h2>
+              <p class="text-xs text-slate-500">Selecciona un paciente cuando llegue al consultorio</p>
+            </div>
+            <button id="btnNuevoPacienteModal"
+              class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold flex items-center gap-1 shadow-sm transition">
+              <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
+              Nuevo
+            </button>
+          </div>
+
+          <div class="p-3 border-b border-slate-100 bg-slate-50/50">
+            <div class="relative">
+              <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
+              <input type="text" id="searchPatientsList" placeholder="Filtrar por nombre, ID o teléfono..."
+                class="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-sky-500 outline-none" />
+            </div>
+          </div>
+
+          <div id="patientsListContainer" class="flex-1 overflow-y-auto divide-y divide-slate-100 p-2">
+            <!-- Renderizado dinámicamente -->
+          </div>
+        </div>
+
+        <!-- Columna Derecha: Expediente Clínico Electrónico del Paciente Seleccionado -->
+        <div class="lg:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col min-h-[680px]">
+
+          <!-- Estado vacío cuando no se ha seleccionado paciente -->
+          <div id="emptyExpedienteState" class="flex-1 flex flex-col items-center justify-center p-8 text-center">
+            <div class="w-16 h-16 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mb-4">
+              <i data-lucide="file-text" class="w-8 h-8"></i>
+            </div>
+            <h3 class="text-lg font-bold text-slate-800 mb-1">Expediente Clínico Electrónico</h3>
+            <p class="text-sm text-slate-500 max-w-md mb-6">
+              Selecciona a un paciente de la lista izquierda o búscalo por su nombre arriba para ver todo lo que se le ha realizado por fecha, agregar un nuevo procedimiento o descargar su expediente en PDF.
+            </p>
+            <div class="flex flex-wrap justify-center gap-3">
+              <button id="btnEmptyNuevoPaciente"
+                class="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-xl shadow-sm transition flex items-center gap-2">
+                <i data-lucide="user-plus" class="w-4 h-4"></i>
+                Registrar Nuevo Paciente
+              </button>
+              <button id="btnEmptyRegistrarTrabajo"
+                class="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold rounded-xl shadow-sm transition flex items-center gap-2">
+                <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                Registrar Procedimiento Realizado
+              </button>
+            </div>
+          </div>
+
+          <!-- Vista activa del Expediente del Paciente -->
+          <div id="activeExpedienteView" class="hidden flex-1 flex flex-col">
+            <!-- Encabezado del expediente -->
+            <div class="p-5 sm:p-6 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-sky-50/40 rounded-t-2xl">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div class="flex items-start gap-3.5">
+                  <div id="expAvatar" class="w-13 h-13 rounded-2xl bg-sky-600 text-white font-bold text-lg flex items-center justify-center shadow-sm shrink-0 px-4 py-3">
+                    P
+                  </div>
+                  <div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <h2 id="expNombre" class="text-xl font-bold text-slate-900">Nombre del Paciente</h2>
+                      <span id="expIdBadge" class="text-[11px] font-mono bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md">ID</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 mt-1.5">
+                      <span class="flex items-center gap-1"><i data-lucide="phone" class="w-3.5 h-3.5 text-slate-400"></i> <strong id="expTelefono">-</strong></span>
+                      <span class="flex items-center gap-1"><i data-lucide="user" class="w-3.5 h-3.5 text-slate-400"></i> Edad: <strong id="expEdad">-</strong></span>
+                      <span class="flex items-center gap-1"><i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-400"></i> Alta: <strong id="expFechaAlta">-</strong></span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Botones de Acción del Expediente (Descargar PDF / Nueva Consulta / Editar) -->
+                <div class="flex flex-wrap items-center gap-2">
+                  <button id="btnDownloadPDF"
+                    class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="file-down" class="w-4 h-4"></i>
+                    Descargar PDF
+                  </button>
+                  <button id="btnAddTreatmentFromExp"
+                    class="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    Agregar Trabajo Hoy
+                  </button>
+                  <button id="btnEditPatient" title="Editar datos del paciente"
+                    class="p-2 rounded-xl border border-slate-300 hover:bg-white text-slate-600 transition">
+                    <i data-lucide="pencil" class="w-4 h-4"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Alerta médica / Alergias / Antecedentes -->
+              <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="bg-amber-50/90 border border-amber-200 rounded-xl p-3 flex items-start gap-2.5">
+                  <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-600 shrink-0 mt-0.5"></i>
+                  <div class="text-xs">
+                    <span class="font-bold text-amber-900 block">Alergias y Antecedentes Médicos:</span>
+                    <span id="expAlergias" class="text-amber-800">Ninguna reportada</span>
+                  </div>
+                </div>
+                <div class="bg-white border border-slate-200 rounded-xl p-3 flex items-start gap-2.5">
+                  <i data-lucide="sticky-note" class="w-4 h-4 text-sky-600 shrink-0 mt-0.5"></i>
+                  <div class="text-xs">
+                    <span class="font-bold text-slate-700 block">Notas Generales / Odontograma:</span>
+                    <span id="expNotas" class="text-slate-600">Sin notas adicionales</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Historial de Procedimientos Realizados al Paciente -->
+            <div class="p-5 sm:p-6 flex-1 flex flex-col">
+              <div class="flex items-center justify-between mb-4">
+                <div>
+                  <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                    <i data-lucide="history" class="w-4 h-4 text-teal-600"></i>
+                    Historial de Trabajos y Procedimientos Realizados
+                  </h3>
+                  <p class="text-xs text-slate-500">Registro cronológico de cada visita del paciente</p>
+                </div>
+                <span id="expCountTratamientos" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-teal-50 text-teal-700">
+                  0 registros
+                </span>
+              </div>
+
+              <div id="expHistorialTimeline" class="space-y-3 overflow-y-auto max-h-[420px] pr-1">
+                <!-- Se llena con cada procedimiento realizado y fecha -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PESTAÑA 2: AGENDA DE CITAS                                          -->
+    <!-- =================================================================== -->
+    <section id="tab-agenda" class="tab-panel hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Formulario para Agendar Nueva Cita -->
+        <div class="lg:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <div class="flex items-center gap-2.5 mb-4 pb-3 border-b border-slate-100">
+            <div class="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <i data-lucide="calendar-plus" class="w-5 h-5"></i>
+            </div>
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Agendar Nueva Cita</h2>
+              <p class="text-xs text-slate-500">Programa la próxima visita del paciente</p>
+            </div>
+          </div>
+
+          <form id="formNuevaCita" class="space-y-3.5">
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Seleccionar Paciente Existente (Opcional)</label>
+              <select id="citaSelectPaciente"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                <option value="">-- Escribir nombre manualmente o elegir --</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Nombre del Paciente *</label>
+              <input type="text" id="citaNombrePaciente" required placeholder="Ej. María Fernanda López"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Teléfono / WhatsApp</label>
+              <input type="tel" id="citaTelefono" placeholder="Ej. 55 1234 5678"
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Fecha de la Cita *</label>
+                <input type="date" id="citaFecha" required
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Hora *</label>
+                <input type="time" id="citaHora" required value="10:00"
+                  class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Motivo / Tratamiento a Realizar *</label>
+              <input type="text" id="citaMotivo" required placeholder="Ej. Limpieza dental, Resina molar, Endodoncia..."
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Notas adicionales</label>
+              <textarea id="citaNotas" rows="2" placeholder="Observaciones para la cita..."
+                class="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></textarea>
+            </div>
+
+            <button type="submit"
+              class="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm transition flex items-center justify-center gap-2 text-sm">
+              <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+              Guardar Cita en Agenda
+            </button>
+          </form>
+        </div>
+
+        <!-- Listado de Citas Agendadas -->
+        <div class="lg:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Agenda del Consultorio</h2>
+              <p class="text-xs text-slate-500">Haz clic en "Atender" cuando llegue el paciente para abrir su expediente o registrar qué se le realizó</p>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <input type="date" id="agendaFilterDate"
+                class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" />
+              <button id="btnAgendaVerTodas"
+                class="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-medium text-slate-600 transition">
+                Ver Todas
+              </button>
+            </div>
+          </div>
+
+          <div id="agendaListContainer" class="space-y-3 flex-1 overflow-y-auto max-h-[540px]">
+            <!-- Citas dinámicas -->
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PESTAÑA 3: REGISTRAR TRABAJO REALIZADO / CONSULTA DEL DÍA           -->
+    <!-- =================================================================== -->
+    <section id="tab-registrar" class="tab-panel hidden">
+      <div class="max-w-3xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
+          <div class="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+            <i data-lucide="clipboard-List" class="w-6 h-6"></i>
+          </div>
+          <div>
+            <h2 class="text-lg font-bold text-slate-900">Registrar Procedimiento Realizado al Paciente</h2>
+            <p class="text-xs text-slate-500">
+              Anota el nombre del paciente, qué tratamiento se le realizó y qué día. Se agregará automáticamente a su expediente electrónico.
+            </p>
+          </div>
+        </div>
+
+        <form id="formRegistrarTratamiento" class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                Seleccionar Paciente Registrado
+              </label>
+              <select id="regSelectPaciente"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm bg-white focus:ring-2 focus:ring-teal-500 outline-none">
+                <option value="">-- Paciente Nuevo (Escribir al lado) --</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                Nombre Completo del Paciente *
+              </label>
+              <input type="text" id="regNombrePaciente" required placeholder="Ej. Carlos Alberto Ramírez"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+            </div>
+          </div>
+
+          <!-- Datos rápidos si es paciente nuevo -->
+          <div id="regNuevoPacienteFields" class="grid grid-cols-1 sm:grid-cols-3 gap-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Teléfono</label>
+              <input type="tel" id="regTelefono" placeholder="Ej. 55 9876 5432"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white outline-none" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Edad</label>
+              <input type="number" id="regEdad" placeholder="Ej. 34"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white outline-none" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Alergias / Antecedentes</label>
+              <input type="text" id="regAlergias" placeholder="Ej. Penicilina / Ninguna"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white outline-none" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                Fecha en que se realizó *
+              </label>
+              <input type="date" id="regFechaAtencion" required
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                Pieza Dental / Zona
+              </label>
+              <input type="text" id="regPiezaDental" placeholder="Ej. OD 16, Cuadrante Sup, General"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                Honorarios / Costo ($)
+              </label>
+              <input type="number" step="0.01" id="regCosto" placeholder="Ej. 850.00"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              ¿Qué trabajo o procedimiento se le realizó? *
+            </label>
+            <input type="text" id="regProcedimiento" required
+              placeholder="Ej. Profilaxis con ultrasonido, Resina compuesta fotopolimerizable, Extracción simple..."
+              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+            <!-- Botones rápidos de tratamientos frecuentes -->
+            <div class="flex flex-wrap gap-1.5 mt-2">
+              <span class="text-[11px] text-slate-400 mr-1 self-center">Rápidos:</span>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Limpieza Dental (Profilaxis)</button>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Resina Compuesta</button>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Extracción Dental</button>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Endodoncia</button>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Ajuste de Ortodoncia</button>
+              <button type="button" class="quick-proc text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 transition">Valoración y Diagnóstico</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              Evolución, Indicaciones y Notas Clínicas
+            </label>
+            <textarea id="regObservaciones" rows="3"
+              placeholder="Ej. Anestesia lidocaína 2%, sin complicaciones. Se indica analgésico cada 8 hrs y cita de revisión en 7 días."
+              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              Odontólogo(a) que atendió
+            </label>
+            <input type="text" id="regDoctor" placeholder="Nombre del Doctor(a)"
+              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+          </div>
+
+          <div class="pt-3 flex justify-end gap-3">
+            <button type="submit"
+              class="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-xl shadow transition flex items-center gap-2 text-sm">
+              <i data-lucide="save" class="w-4 h-4"></i>
+              Guardar en Expediente y Google Sheets
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- PESTAÑA 4: GUÍA PASO A PASO PARA GOOGLE SHEETS                      -->
+    <!-- =================================================================== -->
+    <section id="tab-guia" class="tab-panel hidden">
+      <div class="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
+        <div class="flex items-center gap-3 pb-4 border-b border-slate-100">
+          <div class="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+            <i data-lucide="table-2" class="w-6 h-6"></i>
+          </div>
+          <div>
+            <h2 class="text-lg font-bold text-slate-900">Cómo conectar tu Google Sheets (Gratis y Privado)</h2>
+            <p class="text-xs text-slate-500">Sigue estos pasos una única vez para que todo se guarde en tu propia hoja de cálculo</p>
+          </div>
+        </div>
+
+        <ol class="space-y-4 text-sm text-slate-700 list-decimal pl-5">
+          <li>
+            <strong>Crea una Hoja de Cálculo en Google Sheets:</strong> Ve a <a href="https://sheets.new" target="_blank" class="text-sky-600 underline font-medium">sheets.new</a> con tu cuenta de Google y ponle de título <em>"Expedientes Consultorio Dental"</em>.
+          </li>
+          <li>
+            <strong>Abre Apps Script:</strong> En el menú superior de tu Google Sheet, haz clic en <strong>Extensiones &rarr; Apps Script</strong>.
+          </li>
+          <li>
+            <strong>Pega el código del servidor:</strong> Copia todo el contenido del archivo <code>google-apps-script.gs</code> incluido en tu proyecto (o usa el botón de abajo para copiarlo) y pégalo reemplazando el código vacío.
+          </li>
+          <li>
+            <strong>Personaliza tu contraseña:</strong> En la línea <code>const CLAVE_ACCESO = "dental2026";</code> pon la clave secreta que quieras usar para tu consultorio.
+          </li>
+          <li>
+            <strong>Publica como Aplicación Web:</strong>
+            <ul class="list-disc pl-5 mt-1 space-y-1 text-slate-600">
+              <li>Haz clic arriba a la derecha en el botón azul <strong>Implementar &rarr; Nueva implementación</strong>.</li>
+              <li>Elige el tipo <strong>Aplicación web</strong>.</li>
+              <li>En <em>"Ejecutar como"</em> deja seleccionado <strong>Yo</strong>.</li>
+              <li>En <em>"Quién tiene acceso"</em> selecciona <strong>Cualquier persona</strong> (el script validará tu <code>CLAVE_ACCESO</code> antes de responder).</li>
+              <li>Autoriza los permisos con tu cuenta de Google y copia la <strong>URL de la aplicación web</strong> que termina en <code>/exec</code>.</li>
+            </ul>
+          </li>
+          <li>
+            <strong>Conecta el sistema:</strong> Haz clic en el engrane arriba a la derecha en esta página, pega la URL y tu clave de acceso. ¡Listo! Automáticamente se crearán las pestañas <code>Pacientes</code>, <code>Historial_Clinico</code> y <code>Agenda</code>.
+          </li>
+        </ol>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL PARA CREAR / EDITAR DATOS GENERALES DEL PACIENTE                -->
+  <!-- ===================================================================== -->
+  <div id="patientModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-100">
+      <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+        <h3 id="patientModalTitle" class="text-base font-bold text-slate-900">Ficha del Paciente</h3>
+        <button id="btnClosePatientModal" class="text-slate-400 hover:text-slate-600">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <form id="formPacienteModal" class="space-y-3.5">
+        <input type="hidden" id="modalPatientId" />
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Nombre Completo del Paciente *</label>
+          <input type="text" id="modalPatientName" required placeholder="Ej. Ana Sofía Hernández"
+            class="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Teléfono / Celular</label>
+            <input type="tel" id="modalPatientPhone" placeholder="Ej. 55 1122 3344"
+              class="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Edad</label>
+            <input type="number" id="modalPatientAge" placeholder="Ej. 29"
+              class="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Alergias / Enfermedades Sistémicas / Antecedentes</label>
+          <input type="text" id="modalPatientAllergies" placeholder="Ej. Hipertensión controlada, Alergia a látex..."
+            class="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Notas Generales / Observaciones del Expediente</label>
+          <textarea id="modalPatientNotes" rows="3" placeholder="Antecedentes odontológicos, plan de tratamiento general..."
+            class="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 outline-none"></textarea>
+        </div>
+
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" id="btnCancelPatientModal"
+            class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50">
+            Cancelar
+          </button>
+          <button type="submit"
+            class="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold shadow-sm">
+            Guardar Expediente
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- NOTIFICACIÓN TOAST -->
+  <div id="toastNotification"
+    class="fixed bottom-5 right-5 z-50 hidden bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg text-xs font-medium flex items-center gap-2.5">
+    <span id="toastMessage">Acción completada</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

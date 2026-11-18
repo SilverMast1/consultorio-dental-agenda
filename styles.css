@@ -1,0 +1,26 @@
+/* Estilos personalizados para el Sistema Dental */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.active-tab {
+  background-color: #0284c7;
+  color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.3);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.patient-item-active {
+  background-color: #f0f9ff;
+  border-left: 4px solid #0284c7;
+}
