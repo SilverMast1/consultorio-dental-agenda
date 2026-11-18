@@ -27,6 +27,12 @@ const HOJA_PACIENTES = "Pacientes";
 const HOJA_HISTORIAL = "Historial_Clinico";
 const HOJA_AGENDA = "Agenda";
 
+// Parámetros de auto-rotación y archivado automático (0 mantenimiento manual)
+const DIAS_RETENCION_AGENDA_ACTIVA = 30;
+const MAX_FILAS_HISTORIAL_ACTIVO = 15000;
+const BLOQUE_ARCHIVADO_HISTORIAL = 5000;
+const MAX_FILAS_ARCHIVO_POR_PESTANA = 40000;
+
 /**
  * Crea las hojas necesarias en el Google Sheet si no existen.
  */
@@ -87,7 +93,183 @@ function inicializarHojas() {
 }
 
 /**
- * Maneja peticiones GET (Lectura de datos)
+ * Obtiene o crea una hoja de archivo histórica (ej. Archivo_Agenda_2026)
+ * respetando un máximo de filas por pestaña para no degradar el rendimiento.
+ */
+function obtenerOcrearHojaArchivo(ss, prefijoBase, anio, encabezados) {
+  let sufijo = 1;
+  while (true) {
+    const nombre = sufijo === 1 ? `${prefijoBase}_${anio}` : `${prefijoBase}_${anio}_${sufijo}`;
+    let sheet = ss.getSheetByName(nombre);
+    if (!sheet) {
+      sheet = ss.insertSheet(nombre);
+      sheet.appendRow(encabezados);
+      sheet.getRange(1, 1, 1, encabezados.length).setFontWeight("bold").setBackground("#475569").setFontColor("#ffffff");
+      return sheet;
+    }
+    if (sheet.getLastRow() <= MAX_FILAS_ARCHIVO_POR_PESTANA) {
+      return sheet;
+    }
+    sufijo++;
+  }
+}
+
+function normalizarFechaISO(valor, tz) {
+  if (!valor) return "";
+  if (Object.prototype.toString.call(valor) === "[object Date]" && !isNaN(valor.getTime())) {
+    return Utilities.formatDate(valor, tz, "yyyy-MM-dd");
+  }
+  return String(valor).trim().substring(0, 10);
+}
+
+/**
+ * Mueve citas anteriores a DIAS_RETENCION_AGENDA_ACTIVA días a Archivo_Agenda_<AÑO>
+ */
+function rotarAgendaAntigua(ss) {
+  const sheetA = ss.getSheetByName(HOJA_AGENDA);
+  if (!sheetA || sheetA.getLastRow() <= 1) return;
+
+  const tz = Session.getScriptTimeZone();
+  const corteDate = new Date();
+  corteDate.setDate(corteDate.getDate() - DIAS_RETENCION_AGENDA_ACTIVA);
+  const fechaCorte = Utilities.formatDate(corteDate, tz, "yyyy-MM-dd");
+
+  const rows = sheetA.getDataRange().getValues();
+  if (rows.length <= 1) return;
+
+  const encabezados = rows[0];
+  const filasActivas = [];
+  const filasPorAnio = {};
+  let hayArchivables = false;
+
+  for (let i = 1; i < rows.length; i++) {
+    const fechaStr = normalizarFechaISO(rows[i][4], tz);
+    if (fechaStr && /^\d{4}-\d{2}-\d{2}$/.test(fechaStr) && fechaStr < fechaCorte) {
+      const anio = fechaStr.substring(0, 4);
+      if (!filasPorAnio[anio]) filasPorAnio[anio] = [];
+      filasPorAnio[anio].push(rows[i]);
+      hayArchivables = true;
+    } else {
+      filasActivas.push(rows[i]);
+    }
+  }
+
+  if (!hayArchivables) return;
+
+  const anios = Object.keys(filasPorAnio);
+  for (let i = 0; i < anios.length; i++) {
+    const anio = anios[i];
+    const lote = filasPorAnio[anio];
+    const destSheet = obtenerOcrearHojaArchivo(ss, "Archivo_Agenda", anio, encabezados);
+    const destLast = destSheet.getLastRow();
+    destSheet.getRange(destLast + 1, 1, lote.length, encabezados.length).setValues(lote);
+  }
+
+  sheetA.clearContents();
+  const nuevas = [encabezados].concat(filasActivas);
+  sheetA.getRange(1, 1, nuevas.length, encabezados.length).setValues(nuevas);
+  sheetA.getRange(1, 1, 1, encabezados.length).setFontWeight("bold").setBackground("#4f46e5").setFontColor("#ffffff");
+}
+
+/**
+ * Cuando Historial_Clinico supera MAX_FILAS_HISTORIAL_ACTIVO, mueve las filas más
+ * antiguas en bloque a Archivo_Historial_<AÑO> manteniendo rápida la hoja activa.
+ */
+function rotarHistorialAntiguo(ss) {
+  const sheetH = ss.getSheetByName(HOJA_HISTORIAL);
+  if (!sheetH) return;
+  const lastRow = sheetH.getLastRow();
+  if (lastRow <= MAX_FILAS_HISTORIAL_ACTIVO) return;
+
+  const numCols = sheetH.getLastColumn();
+  const numMover = Math.min(BLOQUE_ARCHIVADO_HISTORIAL, lastRow - 1);
+  if (numMover <= 0) return;
+
+  const tz = Session.getScriptTimeZone();
+  const anioActual = Utilities.formatDate(new Date(), tz, "yyyy");
+  const encabezados = sheetH.getRange(1, 1, 1, numCols).getValues()[0];
+  const lote = sheetH.getRange(2, 1, numMover, numCols).getValues();
+
+  const filasPorAnio = {};
+  for (let i = 0; i < lote.length; i++) {
+    const fechaStr = normalizarFechaISO(lote[i][3], tz);
+    const anio = /^\d{4}/.test(fechaStr) ? fechaStr.substring(0, 4) : anioActual;
+    if (!filasPorAnio[anio]) filasPorAnio[anio] = [];
+    filasPorAnio[anio].push(lote[i]);
+  }
+
+  const anios = Object.keys(filasPorAnio);
+  for (let i = 0; i < anios.length; i++) {
+    const anio = anios[i];
+    const subLote = filasPorAnio[anio];
+    const destSheet = obtenerOcrearHojaArchivo(ss, "Archivo_Historial", anio, encabezados);
+    const destLast = destSheet.getLastRow();
+    destSheet.getRange(destLast + 1, 1, subLote.length, numCols).setValues(subLote);
+  }
+
+  sheetH.deleteRows(2, numMover);
+}
+
+/**
+ * Ejecuta el mantenimiento automático de hojas una sola vez al día.
+ */
+function ejecutarMantenimientoAutomaticoDiario(ss) {
+  const tz = Session.getScriptTimeZone();
+  const hoy = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty("ULTIMO_MANTENIMIENTO_FECHA") === hoy) {
+    return;
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) return;
+
+  try {
+    if (props.getProperty("ULTIMO_MANTENIMIENTO_FECHA") === hoy) {
+      return;
+    }
+    rotarAgendaAntigua(ss);
+    rotarHistorialAntiguo(ss);
+    props.setProperty("ULTIMO_MANTENIMIENTO_FECHA", hoy);
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (e) {}
+  }
+}
+
+/**
+ * Busca registros archivados de un paciente en todas las pestañas Archivo_Historial_*
+ */
+function buscarHistorialArchivadoPaciente(ss, idPaciente) {
+  const target = String(idPaciente || "");
+  if (!target) return [];
+
+  const sheets = ss.getSheets();
+  const resultados = [];
+
+  for (let s = 0; s < sheets.length; s++) {
+    const sheet = sheets[s];
+    if (sheet.getName().indexOf("Archivo_Historial_") !== 0 || sheet.getLastRow() <= 1) {
+      continue;
+    }
+    const rows = sheet.getDataRange().getDisplayValues();
+    const headers = rows[0];
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][1]) === target) {
+        const obj = {};
+        for (let j = 0; j < headers.length; j++) {
+          obj[headers[j]] = rows[i][j];
+        }
+        resultados.push(obj);
+      }
+    }
+  }
+  return resultados;
+}
+
+/**
+ * Maneja peticiones GET (Lectura de datos y consulta bajo demanda de historial archivado)
  */
 function doGet(e) {
   try {
@@ -100,15 +282,32 @@ function doGet(e) {
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // Consulta bajo demanda de historial archivado para un paciente específico
+    if (params.action === "historialPaciente" && params.idPaciente) {
+      const historialArchivado = buscarHistorialArchivadoPaciente(ss, params.idPaciente);
+      return respuestaJSON({
+        ok: true,
+        historialArchivado: historialArchivado
+      });
+    }
+
+    // Mantenimiento automático diario (rota citas >30 días e historial >15,000 filas sin intervención manual)
+    ejecutarMantenimientoAutomaticoDiario(ss);
+
     const pacientes = leerHojaComoObjetos(ss.getSheetByName(HOJA_PACIENTES));
     const historial = leerHojaComoObjetos(ss.getSheetByName(HOJA_HISTORIAL));
     const agenda = leerHojaComoObjetos(ss.getSheetByName(HOJA_AGENDA));
+    const tieneArchivosHistorial = ss.getSheets().some(function (s) {
+      return s.getName().indexOf("Archivo_Historial_") === 0 && s.getLastRow() > 1;
+    });
 
     return respuestaJSON({
       ok: true,
       pacientes: pacientes,
       historial: historial,
-      agenda: agenda
+      agenda: agenda,
+      tieneArchivosHistorial: tieneArchivosHistorial
     });
   } catch (err) {
     return respuestaJSON({ ok: false, error: err.toString() });

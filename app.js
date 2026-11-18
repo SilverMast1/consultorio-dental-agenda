@@ -33,6 +33,8 @@ let state = {
   pendingQueue: [],
   pacientePorId: new Map(),
   historialPorPaciente: new Map(),
+  tieneArchivosHistorial: false,
+  archivosCargadosPorPaciente: new Set(),
   selectedPatientId: null,
   isSyncing: false
 };
@@ -425,6 +427,8 @@ async function sincronizarDesdeGoogleSheets() {
     state.pacientes = data.pacientes || [];
     state.historial = data.historial || [];
     state.agenda = data.agenda || [];
+    state.tieneArchivosHistorial = Boolean(data.tieneArchivosHistorial);
+    state.archivosCargadosPorPaciente = new Set();
     guardarDatosLocales();
     renderizarTodo();
     actualizarEncabezado("Conectado a Google Sheets", true);
@@ -658,12 +662,65 @@ function renderizarSelectoresPacientes() {
   document.getElementById("citaSelectPaciente").innerHTML = opcionesHTML;
 }
 
+async function cargarHistorialArchivadoPaciente(idPaciente) {
+  const pid = String(idPaciente || "");
+  if (
+    !pid ||
+    !state.tieneArchivosHistorial ||
+    !state.config.scriptUrl ||
+    !state.config.accessKey ||
+    state.archivosCargadosPorPaciente.has(pid)
+  ) {
+    return;
+  }
+
+  state.archivosCargadosPorPaciente.add(pid);
+
+  try {
+    const url = `${state.config.scriptUrl}?key=${encodeURIComponent(
+      state.config.accessKey
+    )}&action=historialPaciente&idPaciente=${encodeURIComponent(pid)}&t=${Date.now()}`;
+    const response = await fetch(url, { method: "GET" });
+    const data = await response.json();
+
+    if (!data.ok || !Array.isArray(data.historialArchivado) || data.historialArchivado.length === 0) {
+      return;
+    }
+
+    const idsExistentes = new Set(state.historial.map((h) => String(h.ID_Registro || "")));
+    let nuevosAgregados = 0;
+
+    data.historialArchivado.forEach((reg) => {
+      const regId = String(reg.ID_Registro || "");
+      if (!regId || !idsExistentes.has(regId)) {
+        state.historial.push(reg);
+        if (regId) idsExistentes.add(regId);
+        nuevosAgregados++;
+      }
+    });
+
+    if (nuevosAgregados > 0) {
+      guardarDatosLocales();
+      renderizarEstadisticas();
+      renderizarListaPacientes();
+      if (String(state.selectedPatientId) === pid) {
+        renderizarExpedienteSeleccionado();
+      }
+      lucide.createIcons();
+      mostrarToast(`Se cargaron ${nuevosAgregados} registro(s) históricos archivados del paciente`);
+    }
+  } catch (err) {
+    console.warn("No se pudo consultar historial archivado:", err);
+  }
+}
+
 window.seleccionarPaciente = function (idPaciente) {
   state.selectedPatientId = idPaciente;
   activarPestana("tab-expedientes");
   renderizarListaPacientes();
   renderizarExpedienteSeleccionado();
   lucide.createIcons();
+  cargarHistorialArchivadoPaciente(idPaciente);
 };
 
 function renderizarExpedienteSeleccionado() {
@@ -1424,6 +1481,8 @@ function inicializarEventos() {
     state.pendingQueue = [];
     state.pacientePorId = new Map();
     state.historialPorPaciente = new Map();
+    state.tieneArchivosHistorial = false;
+    state.archivosCargadosPorPaciente = new Set();
     state.selectedPatientId = null;
     document.getElementById("configAccessKey").value = "";
     document.getElementById("authError").classList.add("hidden");
