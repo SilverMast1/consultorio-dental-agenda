@@ -116,12 +116,139 @@ function doGet(e) {
 }
 
 /**
- * Maneja peticiones POST (Guardar pacientes, tratamientos y citas)
+ * Busca el número de fila (1-based) donde aparece un ID en la columna A
+ * leyendo únicamente la columna 1 para minimizar memoria y latencia con +50k filas.
+ */
+function buscarFilaPorIdColumnaA(sheet, idBuscado) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  const colValues = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  const target = String(idBuscado);
+  for (let i = 0; i < colValues.length; i++) {
+    if (String(colValues[i][0]) === target) {
+      return i + 2;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Ejecuta una acción individual sobre las hojas de cálculo.
+ */
+function procesarAccion(ss, payload) {
+  const action = payload.action;
+
+  // --- GUARDAR O ACTUALIZAR PACIENTE ---
+  if (action === "guardarPaciente") {
+    const sheet = ss.getSheetByName(HOJA_PACIENTES);
+    const p = payload.paciente;
+    const idPaciente = p.ID_Paciente || ("PAC-" + new Date().getTime());
+    const filaExistente = buscarFilaPorIdColumnaA(sheet, idPaciente);
+
+    const filaDatos = [
+      idPaciente,
+      p.Nombre_Completo || "",
+      p.Telefono || "",
+      p.Edad || "",
+      p.Alergias_Antecedentes || "Ninguna reportada",
+      p.Notas_Generales || "",
+      p.Fecha_Registro || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")
+    ];
+
+    if (filaExistente > 0) {
+      sheet.getRange(filaExistente, 1, 1, filaDatos.length).setValues([filaDatos]);
+    } else {
+      sheet.appendRow(filaDatos);
+    }
+
+    return { ok: true, idPaciente: idPaciente, mensaje: "Paciente guardado correctamente." };
+  }
+
+  // --- REGISTRAR ATENCIÓN / TRATAMIENTO EN EXPEDIENTE ---
+  if (action === "agregarHistorial") {
+    const sheetH = ss.getSheetByName(HOJA_HISTORIAL);
+    const sheetP = ss.getSheetByName(HOJA_PACIENTES);
+    const h = payload.registro;
+
+    let idPaciente = h.ID_Paciente;
+    if (!idPaciente) {
+      idPaciente = "PAC-" + new Date().getTime();
+      sheetP.appendRow([
+        idPaciente,
+        h.Nombre_Paciente || "",
+        h.Telefono || "",
+        h.Edad || "",
+        h.Alergias_Antecedentes || "Ninguna reportada",
+        h.Notas_Generales || "",
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")
+      ]);
+    }
+
+    const idRegistro = h.ID_Registro || ("TRAT-" + new Date().getTime());
+    sheetH.appendRow([
+      idRegistro,
+      idPaciente,
+      h.Nombre_Paciente || "",
+      h.Fecha_Atencion || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"),
+      h.Procedimiento_Realizado || "",
+      h.Pieza_Dental || "General",
+      h.Observaciones_Evo || "",
+      h.Costo || "0",
+      h.Doctor || "Odontólogo Titular"
+    ]);
+
+    return { ok: true, idRegistro: idRegistro, idPaciente: idPaciente, mensaje: "Tratamiento registrado en el expediente." };
+  }
+
+  // --- GUARDAR O ACTUALIZAR CITA EN LA AGENDA ---
+  if (action === "guardarCita") {
+    const sheetA = ss.getSheetByName(HOJA_AGENDA);
+    const c = payload.cita;
+    const idCita = c.ID_Cita || ("CITA-" + new Date().getTime());
+    const filaExistente = buscarFilaPorIdColumnaA(sheetA, idCita);
+
+    const filaCita = [
+      idCita,
+      c.ID_Paciente || "",
+      c.Nombre_Paciente || "",
+      c.Telefono || "",
+      c.Fecha_Cita || "",
+      c.Hora_Cita || "",
+      c.Motivo_Tratamiento || "",
+      c.Estado || "Programada",
+      c.Notas || ""
+    ];
+
+    if (filaExistente > 0) {
+      sheetA.getRange(filaExistente, 1, 1, filaCita.length).setValues([filaCita]);
+    } else {
+      sheetA.appendRow(filaCita);
+    }
+
+    return { ok: true, idCita: idCita, mensaje: "Cita guardada en la agenda." };
+  }
+
+  // --- CAMBIAR ESTADO DE CITA ---
+  if (action === "estadoCita") {
+    const sheetA = ss.getSheetByName(HOJA_AGENDA);
+    const filaExistente = buscarFilaPorIdColumnaA(sheetA, payload.idCita);
+    if (filaExistente > 0) {
+      sheetA.getRange(filaExistente, 8).setValue(payload.estado);
+      return { ok: true, mensaje: "Estado de cita actualizado." };
+    }
+    return { ok: false, error: "Cita no encontrada." };
+  }
+
+  return { ok: false, error: "Acción no reconocida: " + action };
+}
+
+/**
+ * Maneja peticiones POST (Guardar pacientes, tratamientos, citas y lotes)
  */
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(10000);
+    lock.waitLock(25000);
     inicializarHojas();
     const payload = JSON.parse(e.postData.contents);
 
@@ -130,129 +257,17 @@ function doPost(e) {
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const action = payload.action;
 
-    // --- GUARDAR O ACTUALIZAR PACIENTE ---
-    if (action === "guardarPaciente") {
-      const sheet = ss.getSheetByName(HOJA_PACIENTES);
-      const data = sheet.getDataRange().getValues();
-      const p = payload.paciente;
-      let idPaciente = p.ID_Paciente || ("PAC-" + new Date().getTime());
-      let filaExistente = -1;
-
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === String(idPaciente)) {
-          filaExistente = i + 1;
-          break;
-        }
+    // --- PROCESAMIENTO EN LOTE (múltiples acciones en una sola transacción) ---
+    if (payload.action === "lote" && Array.isArray(payload.acciones)) {
+      const resultados = [];
+      for (let i = 0; i < payload.acciones.length; i++) {
+        resultados.push(procesarAccion(ss, payload.acciones[i]));
       }
-
-      const filaDatos = [
-        idPaciente,
-        p.Nombre_Completo || "",
-        p.Telefono || "",
-        p.Edad || "",
-        p.Alergias_Antecedentes || "Ninguna reportada",
-        p.Notas_Generales || "",
-        p.Fecha_Registro || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")
-      ];
-
-      if (filaExistente > 0) {
-        sheet.getRange(filaExistente, 1, 1, filaDatos.length).setValues([filaDatos]);
-      } else {
-        sheet.appendRow(filaDatos);
-      }
-
-      return respuestaJSON({ ok: true, idPaciente: idPaciente, mensaje: "Paciente guardado correctamente." });
+      return respuestaJSON({ ok: true, procesadas: resultados.length, resultados: resultados });
     }
 
-    // --- REGISTRAR ATENCIÓN / TRATAMIENTO EN EXPEDIENTE ---
-    if (action === "agregarHistorial") {
-      const sheetH = ss.getSheetByName(HOJA_HISTORIAL);
-      const sheetP = ss.getSheetByName(HOJA_PACIENTES);
-      const h = payload.registro;
-
-      let idPaciente = h.ID_Paciente;
-      // Si el paciente es nuevo y no existía aún en la hoja Pacientes, lo creamos automáticamente
-      if (!idPaciente) {
-        idPaciente = "PAC-" + new Date().getTime();
-        sheetP.appendRow([
-          idPaciente,
-          h.Nombre_Paciente || "",
-          h.Telefono || "",
-          h.Edad || "",
-          h.Alergias_Antecedentes || "Ninguna reportada",
-          h.Notas_Generales || "",
-          Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")
-        ]);
-      }
-
-      const idRegistro = "TRAT-" + new Date().getTime();
-      sheetH.appendRow([
-        idRegistro,
-        idPaciente,
-        h.Nombre_Paciente || "",
-        h.Fecha_Atencion || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"),
-        h.Procedimiento_Realizado || "",
-        h.Pieza_Dental || "General",
-        h.Observaciones_Evo || "",
-        h.Costo || "0",
-        h.Doctor || "Odontólogo Titular"
-      ]);
-
-      return respuestaJSON({ ok: true, idRegistro: idRegistro, idPaciente: idPaciente, mensaje: "Tratamiento registrado en el expediente." });
-    }
-
-    // --- GUARDAR O ACTUALIZAR CITA EN LA AGENDA ---
-    if (action === "guardarCita") {
-      const sheetA = ss.getSheetByName(HOJA_AGENDA);
-      const data = sheetA.getDataRange().getValues();
-      const c = payload.cita;
-      let idCita = c.ID_Cita || ("CITA-" + new Date().getTime());
-      let filaExistente = -1;
-
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === String(idCita)) {
-          filaExistente = i + 1;
-          break;
-        }
-      }
-
-      const filaCita = [
-        idCita,
-        c.ID_Paciente || "",
-        c.Nombre_Paciente || "",
-        c.Telefono || "",
-        c.Fecha_Cita || "",
-        c.Hora_Cita || "",
-        c.Motivo_Tratamiento || "",
-        c.Estado || "Programada",
-        c.Notas || ""
-      ];
-
-      if (filaExistente > 0) {
-        sheetA.getRange(filaExistente, 1, 1, filaCita.length).setValues([filaCita]);
-      } else {
-        sheetA.appendRow(filaCita);
-      }
-
-      return respuestaJSON({ ok: true, idCita: idCita, mensaje: "Cita guardada en la agenda." });
-    }
-
-    // --- CAMBIAR ESTADO DE CITA ---
-    if (action === "estadoCita") {
-      const sheetA = ss.getSheetByName(HOJA_AGENDA);
-      const data = sheetA.getDataRange().getValues();
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === String(payload.idCita)) {
-          sheetA.getRange(i + 1, 8).setValue(payload.estado);
-          return respuestaJSON({ ok: true, mensaje: "Estado de cita actualizado." });
-        }
-      }
-      return respuestaJSON({ ok: false, error: "Cita no encontrada." });
-    }
-
-    return respuestaJSON({ ok: false, error: "Acción no reconocida: " + action });
+    return respuestaJSON(procesarAccion(ss, payload));
   } catch (err) {
     return respuestaJSON({ ok: false, error: err.toString() });
   } finally {
