@@ -31,36 +31,16 @@
       </div>
 
       <p class="text-sm text-slate-600 mb-5">
-        Tus datos médicos se almacenan de forma privada en tu hoja de Google Sheets. Ingresa los datos de conexión o prueba el modo local/demostración.
+        Ingresa la contraseña del consultorio para acceder a la agenda y a los expedientes clínicos.
       </p>
 
       <form id="authForm" class="space-y-4">
         <div>
           <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
-            Nombre del Consultorio / Doctor(a)
-          </label>
-          <input type="text" id="configClinicName" placeholder="Ej. Clínica Dental Sonrisa Sana - Dr. Pérez"
-            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" />
-        </div>
-
-        <div>
-          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
-            URL de tu Google Apps Script (Web App)
-          </label>
-          <input type="url" id="configScriptUrl" placeholder="https://script.google.com/macros/s/.../exec"
-            value="https://script.google.com/macros/s/AKfycbzDL0Rc27aR4ZfGigjbMrDDagHriTxuzQOiUv2eD_SRvc1wm3LPHH8NHsmyy1e_RdW-BA/exec"
-            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" />
-          <p class="text-[11px] text-slate-400 mt-1">
-            Si lo dejas vacío, el sistema funcionará en modo local (guardado en este navegador) hasta que pegues tu URL.
-          </p>
-        </div>
-
-        <div>
-          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
-            Clave de Acceso (Definida en el Script)
+            Contraseña de Acceso
           </label>
           <input type="password" id="configAccessKey" placeholder="Ingresa la contraseña del consultorio" value=""
-            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" required />
+            class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" required autofocus />
         </div>
 
         <div id="authError" class="hidden text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg p-3"></div>
@@ -118,10 +98,6 @@
           <i data-lucide="refresh-cw" class="w-4 h-4"></i>
           <span class="hidden sm:inline">Sincronizar</span>
         </button>
-        <button id="btnOpenConfig" title="Configuración de Google Sheets"
-          class="p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-sky-600 transition border border-slate-200">
-          <i data-lucide="settings" class="w-4 h-4"></i>
-        </button>
         <button id="btnLockSession" title="Bloquear / Cerrar sesión"
           class="p-2 rounded-lg text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition border border-slate-200">
           <i data-lucide="lock" class="w-4 h-4"></i>
@@ -146,10 +122,6 @@
       <button data-tab="tab-registrar" class="tab-btn flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">
         <i data-lucide="file-plus-2" class="w-4 h-4"></i>
         Registrar Trabajo / Atención
-      </button>
-      <button data-tab="tab-guia" class="tab-btn flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition whitespace-nowrap">
-        <i data-lucide="help-circle" class="w-4 h-4"></i>
-        Guía Google Sheets
       </button>
     </div>
   </div>
@@ -571,51 +543,6 @@
             </button>
           </div>
         </form>
-      </div>
-    </section>
-
-    <!-- =================================================================== -->
-    <!-- PESTAÑA 4: GUÍA PASO A PASO PARA GOOGLE SHEETS                      -->
-    <!-- =================================================================== -->
-    <section id="tab-guia" class="tab-panel hidden">
-      <div class="max-w-4xl mx-auto bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
-        <div class="flex items-center gap-3 pb-4 border-b border-slate-100">
-          <div class="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
-            <i data-lucide="table-2" class="w-6 h-6"></i>
-          </div>
-          <div>
-            <h2 class="text-lg font-bold text-slate-900">Cómo conectar tu Google Sheets (Gratis y Privado)</h2>
-            <p class="text-xs text-slate-500">Sigue estos pasos una única vez para que todo se guarde en tu propia hoja de cálculo</p>
-          </div>
-        </div>
-
-        <ol class="space-y-4 text-sm text-slate-700 list-decimal pl-5">
-          <li>
-            <strong>Crea una Hoja de Cálculo en Google Sheets:</strong> Ve a <a href="https://sheets.new" target="_blank" class="text-sky-600 underline font-medium">sheets.new</a> con tu cuenta de Google y ponle de título <em>"Expedientes Consultorio Dental"</em>.
-          </li>
-          <li>
-            <strong>Abre Apps Script:</strong> En el menú superior de tu Google Sheet, haz clic en <strong>Extensiones &rarr; Apps Script</strong>.
-          </li>
-          <li>
-            <strong>Pega el código del servidor:</strong> Copia todo el contenido del archivo <code>google-apps-script.gs</code> incluido en tu proyecto (o usa el botón de abajo para copiarlo) y pégalo reemplazando el código vacío.
-          </li>
-          <li>
-            <strong>Personaliza tu contraseña:</strong> En la línea <code>const CLAVE_ACCESO = "dental2026";</code> pon la clave secreta que quieras usar para tu consultorio.
-          </li>
-          <li>
-            <strong>Publica como Aplicación Web:</strong>
-            <ul class="list-disc pl-5 mt-1 space-y-1 text-slate-600">
-              <li>Haz clic arriba a la derecha en el botón azul <strong>Implementar &rarr; Nueva implementación</strong>.</li>
-              <li>Elige el tipo <strong>Aplicación web</strong>.</li>
-              <li>En <em>"Ejecutar como"</em> deja seleccionado <strong>Yo</strong>.</li>
-              <li>En <em>"Quién tiene acceso"</em> selecciona <strong>Cualquier persona</strong> (el script validará tu <code>CLAVE_ACCESO</code> antes de responder).</li>
-              <li>Autoriza los permisos con tu cuenta de Google y copia la <strong>URL de la aplicación web</strong> que termina en <code>/exec</code>.</li>
-            </ul>
-          </li>
-          <li>
-            <strong>Conecta el sistema:</strong> Haz clic en el engrane arriba a la derecha en esta página, pega la URL y tu clave de acceso. ¡Listo! Automáticamente se crearán las pestañas <code>Pacientes</code>, <code>Historial_Clinico</code> y <code>Agenda</code>.
-          </li>
-        </ol>
       </div>
     </section>
 

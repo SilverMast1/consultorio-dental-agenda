@@ -139,11 +139,11 @@ function cargarConfiguracionLocal() {
     if (raw) {
       state.config = { ...state.config, ...JSON.parse(raw) };
     }
-    if (!state.config.scriptUrl) {
-      state.config.scriptUrl = DEFAULT_SCRIPT_URL;
-    }
-    document.getElementById("configClinicName").value = state.config.clinicName || "";
-    document.getElementById("configScriptUrl").value = state.config.scriptUrl || "";
+    state.config.scriptUrl = DEFAULT_SCRIPT_URL;
+    const clinicInput = document.getElementById("configClinicName");
+    if (clinicInput) clinicInput.value = state.config.clinicName || "";
+    const urlInput = document.getElementById("configScriptUrl");
+    if (urlInput) urlInput.value = state.config.scriptUrl || "";
     document.getElementById("configAccessKey").value = state.config.accessKey || "";
     document.getElementById("regDoctor").value = state.config.clinicName || "Odontólogo Titular";
   } catch (e) {
@@ -766,10 +766,13 @@ function inicializarEventos() {
     btn.addEventListener("click", () => activarPestana(btn.dataset.tab));
   });
 
-  // Configuración / Login Modal
-  document.getElementById("btnOpenConfig").addEventListener("click", () => {
-    document.getElementById("authModal").classList.remove("hidden");
-  });
+  // Configuración / Login Modal (si existiera el botón)
+  const btnOpenConfig = document.getElementById("btnOpenConfig");
+  if (btnOpenConfig) {
+    btnOpenConfig.addEventListener("click", () => {
+      document.getElementById("authModal").classList.remove("hidden");
+    });
+  }
 
   // Bloquear / Cerrar sesión
   document.getElementById("btnLockSession").addEventListener("click", () => {
@@ -793,9 +796,12 @@ function inicializarEventos() {
     const authErrorEl = document.getElementById("authError");
     authErrorEl.classList.add("hidden");
 
-    state.config.clinicName =
-      document.getElementById("configClinicName").value.trim() || "Consultorio Dental";
-    state.config.scriptUrl = document.getElementById("configScriptUrl").value.trim();
+    const clinicInput = document.getElementById("configClinicName");
+    const urlInput = document.getElementById("configScriptUrl");
+    if (clinicInput) {
+      state.config.clinicName = clinicInput.value.trim() || "Consultorio Dental";
+    }
+    state.config.scriptUrl = urlInput ? urlInput.value.trim() || DEFAULT_SCRIPT_URL : DEFAULT_SCRIPT_URL;
     state.config.accessKey = document.getElementById("configAccessKey").value.trim();
 
     if (state.config.scriptUrl) {
