@@ -5,6 +5,9 @@
  * ============================================================================
  */
 
+const DEFAULT_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbzDL0Rc27aR4ZfGigjbMrDDagHriTxuzQOiUv2eD_SRvc1wm3LPHH8NHsmyy1e_RdW-BA/exec";
+
 const STORAGE_KEYS = {
   CONFIG: "dental_config_v1",
   DATA: "dental_local_data_v1"
@@ -13,7 +16,7 @@ const STORAGE_KEYS = {
 let state = {
   config: {
     clinicName: "Consultorio Dental Sonrisa Sana",
-    scriptUrl: "",
+    scriptUrl: DEFAULT_SCRIPT_URL,
     accessKey: "dental2026"
   },
   pacientes: [],
@@ -136,6 +139,9 @@ function cargarConfiguracionLocal() {
     if (raw) {
       state.config = { ...state.config, ...JSON.parse(raw) };
     }
+    if (!state.config.scriptUrl) {
+      state.config.scriptUrl = DEFAULT_SCRIPT_URL;
+    }
     document.getElementById("configClinicName").value = state.config.clinicName || "";
     document.getElementById("configScriptUrl").value = state.config.scriptUrl || "";
     document.getElementById("configAccessKey").value = state.config.accessKey || "dental2026";
@@ -182,11 +188,15 @@ async function sincronizarDesdeGoogleSheets() {
   if (!state.config.scriptUrl) {
     mostrarToast("Modo Local activo (configura tu URL de Google Sheets cuando gustes)");
     actualizarEncabezado();
-    return;
+    return false;
   }
+
+  const authErrorEl = document.getElementById("authError");
+  const authModalEl = document.getElementById("authModal");
 
   try {
     state.isSyncing = true;
+    if (authErrorEl) authErrorEl.classList.add("hidden");
     actualizarEncabezado("Sincronizando...");
     const url = `${state.config.scriptUrl}?key=${encodeURIComponent(state.config.accessKey)}&t=${Date.now()}`;
     const response = await fetch(url, { method: "GET" });
@@ -203,10 +213,16 @@ async function sincronizarDesdeGoogleSheets() {
     renderizarTodo();
     actualizarEncabezado("Conectado a Google Sheets", true);
     mostrarToast("Datos sincronizados con Google Sheets");
+    return true;
   } catch (err) {
     console.error(err);
     actualizarEncabezado("Error de conexión (Modo Local)", false, true);
+    if (authModalEl && !authModalEl.classList.contains("hidden") && authErrorEl) {
+      authErrorEl.textContent = err.message;
+      authErrorEl.classList.remove("hidden");
+    }
     mostrarToast("No se pudo conectar a Google Sheets: " + err.message);
+    return false;
   } finally {
     state.isSyncing = false;
   }
@@ -749,20 +765,34 @@ function inicializarEventos() {
 
   document.getElementById("authForm").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const authErrorEl = document.getElementById("authError");
+    authErrorEl.classList.add("hidden");
+
     state.config.clinicName =
       document.getElementById("configClinicName").value.trim() || "Consultorio Dental";
     state.config.scriptUrl = document.getElementById("configScriptUrl").value.trim();
     state.config.accessKey = document.getElementById("configAccessKey").value.trim() || "dental2026";
 
-    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(state.config));
-    document.getElementById("authModal").classList.add("hidden");
-    actualizarEncabezado();
-
     if (state.config.scriptUrl) {
-      await sincronizarDesdeGoogleSheets();
+      const btnConnect = document.getElementById("btnConnect");
+      const textoOriginal = btnConnect.innerHTML;
+      btnConnect.disabled = true;
+      btnConnect.textContent = "Conectando con Google Sheets...";
+      const exito = await sincronizarDesdeGoogleSheets();
+      btnConnect.disabled = false;
+      btnConnect.innerHTML = textoOriginal;
+      lucide.createIcons();
+
+      if (!exito) {
+        return;
+      }
     } else {
       mostrarToast("Sesión iniciada en Modo Local");
     }
+
+    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(state.config));
+    document.getElementById("authModal").classList.add("hidden");
+    actualizarEncabezado();
   });
 
   // Botón Sincronizar
