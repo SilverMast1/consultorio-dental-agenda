@@ -21,7 +21,7 @@
  *     en la configuración de tu página web del consultorio.
  */
 
-const CLAVE_ACCESO = "dental2026"; // <-- CAMBIA ESTA CONTRASEÑA SI LO DESEAS
+const CLAVE_ACCESO = "TU_CLAVE_SECRETA_AQUI"; // <-- CAMBIA ESTA CONTRASEÑA POR LA DE TU CONSULTORIO
 
 const HOJA_PACIENTES = "Pacientes";
 const HOJA_HISTORIAL = "Historial_Clinico";

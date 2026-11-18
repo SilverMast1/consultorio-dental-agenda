@@ -17,7 +17,7 @@ let state = {
   config: {
     clinicName: "Consultorio Dental Sonrisa Sana",
     scriptUrl: DEFAULT_SCRIPT_URL,
-    accessKey: "dental2026"
+    accessKey: ""
   },
   pacientes: [],
   historial: [],
@@ -119,9 +119,9 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("regFechaAtencion").value = obtenerFechaHoy();
   document.getElementById("citaFecha").value = obtenerFechaHoy();
 
-  // Si ya tenía configuración guardada, entramos directo
+  // Si ya tenía configuración guardada con clave de acceso, entramos directo y validamos
   const savedConfig = localStorage.getItem(STORAGE_KEYS.CONFIG);
-  if (savedConfig) {
+  if (savedConfig && state.config.accessKey) {
     document.getElementById("authModal").classList.add("hidden");
     actualizarEncabezado();
     renderizarTodo();
@@ -144,7 +144,7 @@ function cargarConfiguracionLocal() {
     }
     document.getElementById("configClinicName").value = state.config.clinicName || "";
     document.getElementById("configScriptUrl").value = state.config.scriptUrl || "";
-    document.getElementById("configAccessKey").value = state.config.accessKey || "dental2026";
+    document.getElementById("configAccessKey").value = state.config.accessKey || "";
     document.getElementById("regDoctor").value = state.config.clinicName || "Odontólogo Titular";
   } catch (e) {
     console.error("Error cargando configuración:", e);
@@ -159,6 +159,10 @@ function cargarDatosLocales() {
       state.pacientes = parsed.pacientes || [];
       state.historial = parsed.historial || [];
       state.agenda = parsed.agenda || [];
+    } else if (state.config.scriptUrl) {
+      state.pacientes = [];
+      state.historial = [];
+      state.agenda = [];
     } else {
       state.pacientes = DEMO_DATA.pacientes;
       state.historial = DEMO_DATA.historial;
@@ -217,6 +221,10 @@ async function sincronizarDesdeGoogleSheets() {
   } catch (err) {
     console.error(err);
     actualizarEncabezado("Error de conexión (Modo Local)", false, true);
+    if ((err.message || "").toLowerCase().includes("clave") && authModalEl) {
+      state.config.accessKey = "";
+      authModalEl.classList.remove("hidden");
+    }
     if (authModalEl && !authModalEl.classList.contains("hidden") && authErrorEl) {
       authErrorEl.textContent = err.message;
       authErrorEl.classList.remove("hidden");
@@ -763,6 +771,23 @@ function inicializarEventos() {
     document.getElementById("authModal").classList.remove("hidden");
   });
 
+  // Bloquear / Cerrar sesión
+  document.getElementById("btnLockSession").addEventListener("click", () => {
+    localStorage.removeItem(STORAGE_KEYS.CONFIG);
+    localStorage.removeItem(STORAGE_KEYS.DATA);
+    state.config.accessKey = "";
+    state.pacientes = [];
+    state.historial = [];
+    state.agenda = [];
+    state.selectedPatientId = null;
+    document.getElementById("configAccessKey").value = "";
+    document.getElementById("authError").classList.add("hidden");
+    renderizarTodo();
+    actualizarEncabezado();
+    document.getElementById("authModal").classList.remove("hidden");
+    mostrarToast("Sesión bloqueada");
+  });
+
   document.getElementById("authForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const authErrorEl = document.getElementById("authError");
@@ -771,7 +796,7 @@ function inicializarEventos() {
     state.config.clinicName =
       document.getElementById("configClinicName").value.trim() || "Consultorio Dental";
     state.config.scriptUrl = document.getElementById("configScriptUrl").value.trim();
-    state.config.accessKey = document.getElementById("configAccessKey").value.trim() || "dental2026";
+    state.config.accessKey = document.getElementById("configAccessKey").value.trim();
 
     if (state.config.scriptUrl) {
       const btnConnect = document.getElementById("btnConnect");
